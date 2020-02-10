@@ -1,15 +1,16 @@
-﻿using System.Data.SqlClient;
-using System;
-using System.Data;
-using System.IO;
-using System.Linq;
+﻿using System;
 using System.Diagnostics;
+using CatalotecaInsertionRobot.src.Utils;
+using System.Collections.Generic;
+using CatalotecaInsertionRobot.app.src;
+using System.Linq;
+using CatalotecaInsertionRobot.src.Data;
 
 namespace CatalotecaInsertionRobot
 {
-  class Program
-  {   
-        private const string tablename = "rawdata";
+    class Program
+    {
+        private const string tablename = "product";
 
         public static void Main()
         {
@@ -17,8 +18,17 @@ namespace CatalotecaInsertionRobot
             Console.WriteLine("-------------------------");
 
             // Input de dados
+            Console.Write("Digite qual o gerenciador de banco de dados (1-MySQL, 2-SQLServer):");
+            string sgbd = Console.ReadLine();
+
             Console.Write("Digite host do banco de dados (Default => localhost):");
             string server = Console.ReadLine();
+
+            Console.Write("Digite usuario (Default => root):");
+            string user = Console.ReadLine();
+
+            Console.Write("Digite a senha: ");
+            string password = CustomConsole.ReadPassword();
 
             Console.Write("Digite o nome do banco de dados (Default => cataloteca):");
             string dbName = Console.ReadLine();
@@ -26,18 +36,18 @@ namespace CatalotecaInsertionRobot
             Console.WriteLine("Digite o caminho completo para o arquivo:");
             string filePath = @Console.ReadLine();
 
-            string stringConnection = GetStringConnection(server, dbName);
-            
+            string stringConnection = Utils.GetStringConnection(sgbd, server, dbName, user, password);
+
             // Iniciando count de tempo de processamento
             var stopwatch = new Stopwatch();
             stopwatch.Start();
 
             Console.WriteLine("-------------------------");
             Console.WriteLine("Iniciando leitura da planilha...");
-            var dt = GetDataTableFromExcel(filePath);
+            List<ProductEntity> dt = Utils.GetDataTableFromExcel(filePath);
 
             Console.WriteLine("Iniciando Inserção...");
-            InsertToSQLUsingSQLBulk(dt, stringConnection, tablename);
+            ForwardsInsertion(stringConnection, sgbd, dt, tablename);
 
 
             Console.WriteLine("-------------------------");
@@ -47,95 +57,61 @@ namespace CatalotecaInsertionRobot
             Console.WriteLine("Fim!");
 
         }
-
-        public static string GetStringConnection(string server, string dbName)
+        private static void ForwardsInsertion(string stringConnection, string sgbd, List<ProductEntity> content, string table)
         {
-            server = server == "" ? "localhost" : server;
-            dbName = dbName == "" ? "cataloteca" : dbName;
-            string stringConnection = $"Server={server}; Initial Catalog = {dbName}; integrated security=true";
-            return stringConnection;
+            if (sgbd == "1")
+            {
+                MysqlData.InsertMySQL(stringConnection, content, table);
+            } else
+            {
+                SqlServerData.InsertSQLServer(stringConnection, content, table);
+            }
         }
 
-        public static DataTable GetDataTableFromExcel(string path, bool hasHeader = true)
+        public class CustomConsole
         {
-            using (var pck = new OfficeOpenXml.ExcelPackage())
+            public static string ReadPassword(char mask)
             {
-                // Abre arquivo
-                using (var stream = File.OpenRead(path))
+                const int ENTER = 13, BACKSP = 8, CTRLBACKSP = 127;
+                int[] FILTERED = { 0, 27, 9, 10 /*, 32 space, if you care */ }; // const
+
+                var pass = new Stack<char>();
+                char chr = (char)0;
+
+                while ((chr = System.Console.ReadKey(true).KeyChar) != ENTER)
                 {
-                    pck.Load(stream);
-                }
-
-                // Pega primeira planilha
-                var ws = pck.Workbook.Worksheets.First();
-
-                // Define objeto de database
-                DataTable database = new DataTable();
-
-
-                foreach (var firstRowCell in ws.Cells[1, 1, 1, ws.Dimension.End.Column])
-                {
-                    database.Columns.Add(hasHeader ? firstRowCell.Text : string.Format("Column {0}", firstRowCell.Start.Column));
-                }
-
-                // Se tiver Header a primeira linha será a 2
-                var startRow = hasHeader ? 2 : 1;
-
-                // For em cada linha da planilha a partir da primeira
-                for (int rowNum = startRow; rowNum <= ws.Dimension.End.Row; rowNum++)
-                {
-                    try
+                    if (chr == BACKSP)
                     {
-                        var wsRow = ws.Cells[rowNum, 1, rowNum, ws.Dimension.End.Column];
-                        DataRow row = database.Rows.Add();
-                        foreach (var cell in wsRow)
+                        if (pass.Count > 0)
                         {
-                            row[cell.Start.Column - 1] = cell.Text;
+                            System.Console.Write("\b \b");
+                            pass.Pop();
                         }
-                    } catch (Exception ex)
-                    {
-                        Console.WriteLine($"Erro na linha {rowNum}");
-                        Console.WriteLine(ex);
-                        
                     }
-
-                }
-                
-                return database;
-            }
-        }
-
-        public static void InsertToSQLUsingSQLBulk(DataTable dt, string connectionstring, string Tablename)
-        {
-
-            try
-            {
-                using (var bulkCopy = new SqlBulkCopy(connectionstring, SqlBulkCopyOptions.KeepIdentity))
-                {
-
-                    //bulkCopy.BulkCopyTimeout = 6000;
-                    var name = new SqlBulkCopyColumnMapping("Name", "Name");
-                    bulkCopy.ColumnMappings.Add(name);
-
-                    var longDescription = new SqlBulkCopyColumnMapping("Description", "Description");
-                    bulkCopy.ColumnMappings.Add(longDescription);
-
-                    bulkCopy.DestinationTableName = Tablename;
-                    bulkCopy.WriteToServer(dt);
-                    Console.WriteLine("-------------------------");
-                    Console.WriteLine("Linhas Inseridas:");
-                    Console.WriteLine(dt.Rows.Count);
+                    else if (chr == CTRLBACKSP)
+                    {
+                        while (pass.Count > 0)
+                        {
+                            System.Console.Write("\b \b");
+                            pass.Pop();
+                        }
+                    }
+                    else if (FILTERED.Count(x => chr == x) > 0) { }
+                    else
+                    {
+                        pass.Push((char)chr);
+                        System.Console.Write(mask);
+                    }
                 }
 
+                System.Console.WriteLine();
+
+                return new string(pass.Reverse().ToArray());
             }
-            catch (Exception ex)
+            public static string ReadPassword()
             {
-                Console.WriteLine("Não foi possível concluir a tarefa");
-                Console.WriteLine(ex);
-                throw ex;
+                return ReadPassword('*');
             }
         }
-
-
     }
 }
